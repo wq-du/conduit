@@ -35,6 +35,7 @@ func TestRender(t *testing.T) {
 		ControllerLogLevel:       "ControllerLogLevel",
 		ControllerComponentLabel: "ControllerComponentLabel",
 		CreatedByAnnotation:      "CreatedByAnnotation",
+		CertificateBundleName:    "CertificateBundleName",
 	}
 
 	testCases := []struct {
