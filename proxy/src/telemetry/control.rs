@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use futures::{future, Async, Future, Poll, Stream};
 use futures_mpsc_lossy::Receiver;
+use hyper_compress::server::GzWriterService;
 use tokio_core::reactor::{Handle, Timeout};
 
 use super::event::Event;
@@ -99,7 +100,7 @@ impl MakeControl {
 
         let flush_timeout = Timeout::new(self.flush_interval, handle)?;
         let (metrics_work, metrics_service) =
-            prometheus::new(&self.process_ctx);
+            prometheus::new(&self.process_ctx, handle);
         let push_metrics = Some(PushMetrics::new(self.process_ctx));
 
         Ok(Control {
@@ -178,6 +179,7 @@ impl Control {
     {
         use hyper;
         let service = self.metrics_service.clone();
+        let service = GzWriterService::new(service);
         let hyper = hyper::server::Http::<hyper::Chunk>::new();
         bound_port.listen_and_fold(
             &self.handle,

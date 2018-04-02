@@ -4,17 +4,19 @@ use std::hash::Hash;
 use std::num::Wrapping;
 use std::sync::{Arc, Mutex};
 
+use futures::Future;
 use futures::future::{self, FutureResult};
 use http;
 use hyper;
-use hyper::header::{ContentLength, ContentType};
 use hyper::StatusCode;
 use hyper::server::{
     Service as HyperService,
-    Request as HyperRequest,
-    Response as HyperResponse
+    Response as HyperResponse,
 };
+use hyper_compress::server::GzWriterRequest;
 use indexmap::{IndexMap};
+use tokio_core::reactor;
+use tokio_io;
 
 use ctx;
 use telemetry::event::Event;
@@ -71,6 +73,7 @@ pub struct Aggregate {
 #[derive(Debug, Clone)]
 pub struct Serve {
     metrics: Arc<Mutex<Metrics>>,
+    handle: reactor::Handle,
 }
 
 /// Construct the Prometheus metrics.
@@ -79,9 +82,11 @@ pub struct Serve {
 /// is a Hyper service which can be used to create the server for the
 /// scrape endpoint, while the `Aggregate` side can receive updates to the
 /// metrics by calling `record_event`.
-pub fn new(process: &Arc<ctx::Process>) -> (Aggregate, Serve) {
+pub fn new(process: &Arc<ctx::Process>, handle: &reactor::Handle)
+    -> (Aggregate, Serve)
+{
     let metrics = Arc::new(Mutex::new(Metrics::new(process)));
-    (Aggregate::new(&metrics), Serve::new(&metrics))
+    (Aggregate::new(&metrics), Serve::new(&metrics, handle))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
@@ -452,18 +457,21 @@ impl Aggregate {
 // ===== impl Serve =====
 
 impl Serve {
-    fn new(metrics: &Arc<Mutex<Metrics>>) -> Self {
-        Serve { metrics: metrics.clone() }
+    fn new(metrics: &Arc<Mutex<Metrics>>, handle: &reactor::Handle) -> Self {
+        Serve {
+            metrics: metrics.clone(),
+            handle: handle.clone(),
+        }
     }
 }
 
 impl HyperService for Serve {
-    type Request = HyperRequest;
+    type Request = GzWriterRequest<hyper::Body>;
     type Response = HyperResponse;
     type Error = hyper::Error;
     type Future = FutureResult<Self::Response, Self::Error>;
 
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&self, (writer, req): Self::Request) -> Self::Future {
         if req.path() != "/metrics" {
             return future::ok(HyperResponse::new()
                 .with_status(StatusCode::NotFound));
@@ -472,12 +480,21 @@ impl HyperService for Serve {
         let body = {
             let metrics = self.metrics.lock()
                 .expect("metrics lock poisoned");
+
+            // TODO: avoid having the whole formatted metrics output in memory.
             format!("{}", *metrics)
         };
-        future::ok(HyperResponse::new()
-            .with_header(ContentLength(body.len() as u64))
-            .with_header(ContentType::plaintext())
-            .with_body(body))
+
+        let work = tokio_io::io::write_all(writer, body)
+            .and_then(|(w, _)| tokio_io::io::shutdown(w))
+            .map(|_| ())
+            .map_err(|e| {
+                error!("error writing metrics: {:?}", e);
+            });
+
+        self.handle.spawn(work);
+
+        future::ok(HyperResponse::new())
     }
 }
 
