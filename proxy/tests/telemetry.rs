@@ -764,12 +764,27 @@ fn metrics_compression() {
     let client = client::new(proxy.inbound, "tele.test.svc.cluster.local");
     let metrics = client::http1(proxy.metrics, "localhost");
 
-    let do_scrape = || {
+    let do_scrape = |encoding: &str| {
         let resp = metrics.request(
             metrics.request_builder("/metrics")
                 .method("GET")
-                .header("Accept-Encoding", "gzip")
+                .header("Accept-Encoding", encoding)
         );
+
+        {
+            // create a new scope so we can release our borrow on `resp` before
+            // getting the body
+            let content_encoding = resp.headers()
+                .get("content-encoding")
+                .as_ref()
+                .map(|val| val
+                    .to_str()
+                    .expect("content-encoding value should be ascii")
+                );
+            assert_eq!(content_encoding, Some("gzip"),
+                "unexpected Content-Encoding {:?} (requested Accept-Encoding: {})", content_encoding, encoding);
+        }
+
         let body = resp.into_body()
             .concat2()
             .wait()
@@ -777,20 +792,35 @@ fn metrics_compression() {
         let mut decoder = flate2::read::GzDecoder::new(body.into_buf());
         let mut scrape = String::new();
         decoder.read_to_string(&mut scrape)
-            .expect("decode gzip");
+            .expect(&format!(
+                "decode gzip (requested Accept-Encoding: {})",
+                encoding
+            ));
         scrape
     };
+
+    let encodings = &[
+        "gzip",
+        "deflate, gzip",
+        "gzip,deflate",
+        "brotli,gzip,deflate"
+    ];
 
     info!("inbound.get(/hey)");
     assert_eq!(client.get("/hey"), "hello");
 
-    let scrape = do_scrape();
-    assert_contains!(scrape,
-        "request_duration_ms_count{authority=\"tele.test.svc.cluster.local\",direction=\"inbound\"} 1");
+    for &encoding in encodings {
+        let scrape = do_scrape(encoding);
+        assert_contains!(scrape,
+            "request_duration_ms_count{authority=\"tele.test.svc.cluster.local\",direction=\"inbound\"} 1");
+    }
 
     info!("outbound.get(/hey)");
     assert_eq!(client.get("/hey"), "hello");
-    let scrape = do_scrape();
-    assert_contains!(scrape,
-        "request_duration_ms_count{authority=\"tele.test.svc.cluster.local\",direction=\"inbound\"} 2");
+
+    for &encoding in encodings {
+        let scrape = do_scrape(encoding);
+        assert_contains!(scrape,
+            "request_duration_ms_count{authority=\"tele.test.svc.cluster.local\",direction=\"inbound\"} 2");
+    }
 }
