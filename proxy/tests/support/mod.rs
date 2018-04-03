@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-extern crate bytes;
+pub extern crate bytes;
 pub extern crate conduit_proxy_controller_grpc;
 extern crate conduit_proxy;
 pub extern crate convert;
