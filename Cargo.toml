@@ -8,9 +8,5 @@ members = [
 ]
 
 [patch.crates-io]
-h2 = { path = "../h2" }
 prost-derive = { git = "https://github.com/danburkert/prost" }
-
-[patch."https://github.com/tower-rs/tower-h2"]
-tower-h2 = { path = "../tower-h2" }
 
