@@ -14,7 +14,13 @@ extern crate tokio_core;
 pub extern crate tokio_io;
 extern crate tower;
 extern crate tower_h2;
+extern crate log;
 pub extern crate env_logger;
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+pub use std::time::Duration;
 
 use self::bytes::{BigEndian, Bytes, BytesMut};
 pub use self::conduit_proxy::*;
@@ -27,8 +33,6 @@ use self::tokio_core::net::{TcpListener, TcpStream};
 use self::tokio_core::reactor::{Core, Handle};
 use self::tower::{NewService, Service};
 use self::tower_h2::{Body, RecvBody};
-use std::net::SocketAddr;
-pub use std::time::Duration;
 
 pub mod client;
 pub mod controller;
@@ -36,18 +40,30 @@ pub mod proxy;
 pub mod server;
 mod tcp;
 
-pub type Shutdown = oneshot::Sender<()>;
-pub type ShutdownRx = future::Then<
-    oneshot::Receiver<()>,
-    Result<(), ()>,
-    fn(Result<(), oneshot::Canceled>) -> Result<(), ()>,
->;
-
-pub fn shutdown_signal() -> (oneshot::Sender<()>, ShutdownRx) {
+pub fn shutdown_signal() -> (Shutdown, ShutdownRx) {
     let (tx, rx) = oneshot::channel();
-    (tx, rx.then(|_| { Ok(()) } as _))
+    (Shutdown { tx }, Box::new(rx.then(|_| Ok(()))))
 }
 
+pub struct Shutdown {
+    tx: oneshot::Sender<()>,
+}
+
+impl Shutdown {
+    pub fn signal(self) {
+        // a drop is enough
+    }
+}
+
+pub type ShutdownRx = Box<Future<Item=(), Error=()> + Send>;
+
+pub fn running() -> (oneshot::Sender<()>, Running) {
+    let (tx, rx) = oneshot::channel();
+    let rx = rx.then((|_| Ok::<_, ()>(())) as fn(_) -> _).fuse();
+    (tx, rx)
+}
+
+pub type Running = future::Fuse<future::Then<oneshot::Receiver<()>, Result<(), ()>, fn(Result<(), oneshot::Canceled>) -> Result<(), ()>>>;
 
 struct RecvBodyStream(tower_h2::RecvBody);
 

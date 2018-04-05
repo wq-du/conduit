@@ -64,6 +64,7 @@ mod connection;
 pub mod control;
 mod ctx;
 mod dns;
+mod drain;
 mod fully_qualified_authority;
 mod inbound;
 mod logging;
@@ -206,6 +207,8 @@ where
 
         let executor = core.handle();
 
+        let (drain_tx, drain_rx) = drain::channel();
+
         let dns_config = dns::Config::from_file(&config.resolv_conf_path);
 
         let bind = Bind::new(executor.clone()).with_sensors(sensors.clone());
@@ -228,6 +231,7 @@ where
                 ctx,
                 sensors.clone(),
                 get_original_dst.clone(),
+                drain_rx.clone(),
                 &executor,
             );
             ::logging::context_future("inbound", fut)
@@ -256,6 +260,7 @@ where
                 ctx,
                 sensors,
                 get_original_dst,
+                drain_rx,
                 &executor,
             );
             ::logging::context_future("outbound", fut)
@@ -316,7 +321,12 @@ where
             .map_err(|err| error!("main error: {:?}", err));
 
         core.handle().spawn(fut);
+        let shutdown_signal = shutdown_signal.and_then(move |()| {
+            debug!("shutdown signaled");
+            drain_tx.drain()
+        });
         core.run(shutdown_signal).expect("executor");
+        debug!("shutdown complete");
     }
 }
 
@@ -328,6 +338,7 @@ fn serve<R, B, E, F, G>(
     proxy_ctx: Arc<ctx::Proxy>,
     sensors: telemetry::Sensors,
     get_orig_dst: G,
+    drain_rx: drain::Watch,
     executor: &Handle,
 ) -> Box<Future<Item = (), Error = io::Error> + 'static>
 where
@@ -376,17 +387,40 @@ where
         stack,
         tcp_connect_timeout,
         disable_protocol_detection_ports,
+        drain_rx.clone(),
         executor.clone(),
     );
 
-    bound_port.listen_and_fold(
+    struct DrainableListen<F>(F, bool);
+
+    impl<F> Future for DrainableListen<F>
+    where
+        F: Future<Item=()>,
+    {
+        type Item = ();
+        type Error = F::Error;
+
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            if self.1 {
+                Ok(().into())
+            } else {
+                self.0.poll()
+            }
+        }
+    }
+
+    let accept = bound_port.listen_and_fold(
         executor,
         (),
         move |(), (connection, remote_addr)| {
             server.serve(connection, remote_addr);
             Ok(())
         },
-    )
+    );
+
+    Box::new(drain_rx.watch(DrainableListen(accept, false), |accept| {
+        accept.1 = true;
+    }))
 }
 
 fn serve_control<N, B>(

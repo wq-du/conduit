@@ -21,13 +21,11 @@ pub fn tcp() -> tcp::TcpServer {
     tcp::server()
 }
 
-#[derive(Debug)]
 pub struct Server {
     routes: HashMap<String, Route>,
     version: Run,
 }
 
-#[derive(Debug)]
 pub struct Listening {
     pub addr: SocketAddr,
     pub(super) shutdown: Shutdown,
