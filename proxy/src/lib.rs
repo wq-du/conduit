@@ -391,23 +391,6 @@ where
         executor.clone(),
     );
 
-    struct DrainableListen<F>(F, bool);
-
-    impl<F> Future for DrainableListen<F>
-    where
-        F: Future<Item=()>,
-    {
-        type Item = ();
-        type Error = F::Error;
-
-        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-            if self.1 {
-                Ok(().into())
-            } else {
-                self.0.poll()
-            }
-        }
-    }
 
     let accept = bound_port.listen_and_fold(
         executor,
@@ -418,9 +401,41 @@ where
         },
     );
 
-    Box::new(drain_rx.watch(DrainableListen(accept, false), |accept| {
-        accept.1 = true;
+    let accept_until = Cancelable {
+        future: accept,
+        canceled: false,
+    };
+
+    // As soon as we get a shutdown signal, the listener
+    // is canceled immediately.
+    Box::new(drain_rx.watch(accept_until, |accept| {
+        accept.canceled = true;
     }))
+}
+
+/// Can cancel a future by setting a flag.
+///
+/// Used to 'watch' the accept futures, and close the listeners
+/// as soon as the shutdown signal starts.
+struct Cancelable<F> {
+    future: F,
+    canceled: bool,
+}
+
+impl<F> Future for Cancelable<F>
+where
+    F: Future<Item=()>,
+{
+    type Item = ();
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if self.canceled {
+            Ok(().into())
+        } else {
+            self.future.poll()
+        }
+    }
 }
 
 fn serve_control<N, B>(

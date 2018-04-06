@@ -236,6 +236,7 @@ fn tcp_serve(
     let fut = tcp.serve(tcp_in, srv_ctx);
 
     // There's nothing to do when drain is signaled, we just have to hope
-    // the sockets finish soon.
+    // the sockets finish soon. However, the drain signal still needs to
+    // 'watch' the TCP future so that the process doesn't close early.
     Box::new(drain_signal.watch(fut, |_| ()))
 }
