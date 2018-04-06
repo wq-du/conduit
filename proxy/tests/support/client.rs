@@ -78,18 +78,15 @@ impl Client {
             .expect("get() wait body")
     }
 
-    pub fn request_async(&self, builder: &mut http::request::Builder) -> impl Future<Item=Response, Error=String> {
+    pub fn request_async(&self, builder: &mut http::request::Builder) -> Box<Future<Item=Response, Error=String> + Send> {
         let (tx, rx) = oneshot::channel();
         let _ = self.tx.unbounded_send((builder.body(()).unwrap(), tx));
-        rx.then(|oneshot_result| oneshot_result.expect("request canceled"))
+        Box::new(rx.then(|oneshot_result| oneshot_result.expect("request canceled")))
     }
 
     pub fn request(&self, builder: &mut http::request::Builder) -> Response {
-        let (tx, rx) = oneshot::channel();
-        let _ = self.tx.unbounded_send((builder.body(()).unwrap(), tx));
-        rx.map_err(|_| panic!("client request dropped"))
+        self.request_async(builder)
             .wait()
-            .map(|result| result.expect("request wait"))
             .expect("response")
     }
 
@@ -120,7 +117,11 @@ fn run(addr: SocketAddr, version: Run) -> (Sender, Running) {
         let mut core = Core::new().expect("client core new");
         let reactor = core.handle();
 
-        let conn = Conn(addr, RefCell::new(Some(running_tx)), reactor.clone());
+        let conn = Conn {
+            addr,
+            handle: reactor.clone(),
+            running: RefCell::new(Some(running_tx)),
+        };
 
         let work: Box<Future<Item=(), Error=()>> = match version {
             Run::Http1 { absolute_uris } => {
