@@ -99,7 +99,7 @@ enum RxError<T> {
     Stream(grpc::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum Update {
     Insert(SocketAddr),
     Remove(SocketAddr),
