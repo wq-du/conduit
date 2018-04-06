@@ -11,6 +11,7 @@ import (
 	tap "github.com/runconduit/conduit/controller/gen/controller/tap"
 	pb "github.com/runconduit/conduit/controller/gen/public"
 	"github.com/runconduit/conduit/pkg/k8s"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -30,11 +31,14 @@ func (f *fakeProm) Series(ctx context.Context, matches []string, startTime time.
 }
 
 var (
-	fakeGrpcServer = newGrpcServer(
+	clientSet       = fake.NewSimpleClientset()
+	sharedInformers = informers.NewSharedInformerFactory(clientSet, 10*time.Minute)
+	fakeGrpcServer  = newGrpcServer(
+		&fakeProm{},
 		&mockTelemetry{},
 		tap.NewTapClient(nil),
-		fake.NewSimpleClientset(),
-		&fakeProm{},
+		sharedInformers.Apps().V1().Deployments().Lister(),
+		sharedInformers.Core().V1().Pods().Lister(),
 		"conduit",
 	)
 )
