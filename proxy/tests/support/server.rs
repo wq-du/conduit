@@ -60,7 +60,7 @@ impl Server {
 
     pub fn route_fn<F>(mut self, path: &str, cb: F) -> Self
     where
-        F: Fn(Request<()>) -> Response<String> + Send + 'static,
+        F: Fn(Request<()>) -> Response<Bytes> + Send + 'static,
     {
         self.routes.insert(path.into(), Route(Box::new(cb)));
         self
@@ -72,7 +72,7 @@ impl Server {
         resp: &str,
         latency: Duration
     ) -> Self {
-        let resp = resp.to_owned();
+        let resp = Bytes::from(resp);
         let route = Route(Box::new(move |_| {
             thread::sleep(latency);
             http::Response::builder()
@@ -200,11 +200,11 @@ impl Body for RspBody {
     }
 }
 
-struct Route(Box<Fn(Request<()>) -> Response<String> + Send>);
+struct Route(Box<Fn(Request<()>) -> Response<Bytes> + Send>);
 
 impl Route {
     fn string(body: &str) -> Route {
-        let body = body.to_owned();
+        let body = Bytes::from(body);
         Route(Box::new(move |_| {
             http::Response::builder()
                 .status(200)
@@ -237,7 +237,7 @@ impl Service for Svc {
         let rsp = match self.0.get(req.uri().path()) {
             Some(route) => {
                 (route.0)(req.map(|_| ()))
-                    .map(|s| RspBody::new(s.as_bytes().into()))
+                    .map(|s| RspBody::new(s))
             }
             None => {
                 println!("server 404: {:?}", req.uri().path());

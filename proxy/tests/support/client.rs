@@ -22,7 +22,7 @@ pub fn http1<T: Into<String>>(addr: SocketAddr, auth: T) -> Client {
     })
 }
 
-// This sends `GET http://foo.com/ HTTP/1.1` instead of just `GET / HTTP/1.1`.
+/// This sends `GET http://foo.com/ HTTP/1.1` instead of just `GET / HTTP/1.1`.
 pub fn http1_absolute_uris<T: Into<String>>(addr: SocketAddr, auth: T) -> Client {
     Client::new(addr, auth.into(), Run::Http1 {
         absolute_uris: true,
@@ -39,6 +39,8 @@ pub fn tcp(addr: SocketAddr) -> tcp::TcpClient {
 
 pub struct Client {
     authority: String,
+    /// This is a future that completes when the associated connection for
+    /// this Client has been dropped.
     running: Running,
     tx: Sender,
     version: http::Version,
@@ -76,13 +78,19 @@ impl Client {
             .expect("get() wait body")
     }
 
+    pub fn request_async(&self, builder: &mut http::request::Builder) -> impl Future<Item=Response, Error=String> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.tx.unbounded_send((builder.body(()).unwrap(), tx));
+        rx.then(|oneshot_result| oneshot_result.expect("request canceled"))
+    }
+
     pub fn request(&self, builder: &mut http::request::Builder) -> Response {
         let (tx, rx) = oneshot::channel();
         let _ = self.tx.unbounded_send((builder.body(()).unwrap(), tx));
         rx.map_err(|_| panic!("client request dropped"))
             .wait()
-            .map(|result| result.expect("request"))
-            .expect("request")
+            .map(|result| result.expect("request wait"))
+            .expect("response")
     }
 
     pub fn request_builder(&self, path: &str) -> http::request::Builder {
@@ -181,12 +189,19 @@ fn run(addr: SocketAddr, version: Run) -> (Sender, Running) {
     (tx, running_rx)
 }
 
-struct Conn(SocketAddr, RefCell<Option<oneshot::Sender<()>>>, Handle);
+/// The "connector". It's only good for 1 connect.
+struct Conn {
+    addr: SocketAddr,
+    handle: Handle,
+    /// When this Sender drops, that should mean the connection is closed.
+    /// This is why this Conn is only usable once.
+    running: RefCell<Option<oneshot::Sender<()>>>,
+}
 
 impl Conn {
     fn connect_(&self) -> Box<Future<Item = RunningIo, Error = ::std::io::Error>> {
-        let running = self.1.borrow_mut().take().expect("connected more than once");
-        let c = TcpStream::connect(&self.0, &self.2)
+        let running = self.running.borrow_mut().take().expect("connected more than once");
+        let c = TcpStream::connect(&self.addr, &self.handle)
             .and_then(|tcp| tcp.set_nodelay(true).map(move |_| tcp))
             .map(move |tcp| RunningIo {
                 inner: tcp,
@@ -195,6 +210,7 @@ impl Conn {
         Box::new(c)
     }
 }
+
 impl Connect for Conn {
     type Connected = RunningIo;
     type Error = ::std::io::Error;
@@ -205,8 +221,22 @@ impl Connect for Conn {
     }
 }
 
+impl hyper::client::Service for Conn {
+    type Request = hyper::Uri;
+    type Response = RunningIo;
+    type Future = Box<Future<Item = Self::Response, Error = ::std::io::Error>>;
+    type Error = ::std::io::Error;
+    fn call(&self, _: hyper::Uri) -> <Self as hyper::client::Service>::Future {
+        self.connect_()
+    }
+}
+
+/// A wrapper around a TcpStream, allowing us to signal when the connection
+/// is dropped.
 struct RunningIo {
     inner: TcpStream,
+    /// When this drops, the related Receiver is notified that the connection
+    /// is closed.
     running: oneshot::Sender<()>,
 }
 
@@ -234,13 +264,3 @@ impl AsyncWrite for RunningIo {
     }
 }
 
-
-impl hyper::client::Service for Conn {
-    type Request = hyper::Uri;
-    type Response = RunningIo;
-    type Future = Box<Future<Item = Self::Response, Error = ::std::io::Error>>;
-    type Error = ::std::io::Error;
-    fn call(&self, _: hyper::Uri) -> <Self as hyper::client::Service>::Future {
-        self.connect_()
-    }
-}

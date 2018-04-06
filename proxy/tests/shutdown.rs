@@ -24,6 +24,67 @@ fn h2_goaways_connections() {
 }
 
 #[test]
+fn h2_exercise_goaways_connections() {
+    let _ = env_logger::try_init();
+
+    const RESPONSE_SIZE: usize = 1024 * 16;
+    const NUM_REQUESTS: usize = 50;
+
+    let (shdn, rx) = shutdown_signal();
+
+    let body = Bytes::from(vec![b'1'; RESPONSE_SIZE]);
+    let srv = server::http2()
+        .route_fn("/", move |_req| {
+            Response::builder()
+                .body(body.clone())
+                .unwrap()
+        })
+        .run();
+    let ctrl = controller::new().run();
+    let proxy = proxy::new()
+        .controller(ctrl)
+        .inbound(srv)
+        .shutdown_signal(rx)
+        .run();
+    let mut client = client::http2(proxy.inbound, "shutdown.test.svc.cluster.local");
+
+    let reqs = (0..NUM_REQUESTS)
+        .into_iter()
+        .map(|_| {
+            client.request_async(
+                client.request_builder("/").method("GET")
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // Wait to get all responses (but not bodies)
+    let resps = future::join_all(reqs)
+        .wait()
+        .expect("reqs");
+
+    // Trigger a shutdown while bodies are still in progress.
+    shdn.signal();
+
+    let bodies = resps
+        .into_iter()
+        .map(|resp| {
+            resp
+                .into_body()
+                .concat2()
+                // Make sure the bodies weren't cut off
+                .map(|buf| assert_eq!(buf.len(), RESPONSE_SIZE))
+        })
+        .collect::<Vec<_>>();
+
+    // See that the proxy gives us all the bodies.
+    future::join_all(bodies)
+        .wait()
+        .expect("bodies");
+
+    client.running().wait().unwrap();
+}
+
+#[test]
 fn http1_closes_idle_connections() {
     let _ = env_logger::try_init();
 

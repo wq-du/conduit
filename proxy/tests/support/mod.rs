@@ -22,7 +22,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 pub use std::time::Duration;
 
-use self::bytes::{BigEndian, Bytes, BytesMut};
+use self::bytes::{BigEndian, BytesMut};
+pub use self::bytes::Bytes;
 pub use self::conduit_proxy::*;
 pub use self::futures::*;
 use self::futures::sync::oneshot;
@@ -57,6 +58,7 @@ impl Shutdown {
 
 pub type ShutdownRx = Box<Future<Item=(), Error=()> + Send>;
 
+/// A channel used to signal when a Client's related connection is running or closed.
 pub fn running() -> (oneshot::Sender<()>, Running) {
     let (tx, rx) = oneshot::channel();
     let rx = rx.then((|_| Ok::<_, ()>(())) as fn(_) -> _).fuse();
