@@ -84,22 +84,22 @@ where
             F: FnMut(CacheChange<K, V>),
         {
             for (key, value) in iter {
-                match inner.insert(key, value.clone()) {
-                    // If the returned value is equal to the inserted value,
-                    // then the inserted key was already present in the map
-                    // and the value is unchanged. Do nothing.
-                    Some(ref old_value) if old_value == &value => {},
-                    // If `insert` returns `Some` with a different value than
-                    // the one we inserted, then we changed the value for that
-                    // key.
-                    Some(_) => on_change(
-                        CacheChange::Modification { key, new_value: value}
-                    ),
-                    // If `insert` returns `Nonoh goe`, then there was no old value
-                    // previously present. Therefore, we inserted a new value
-                    // into the cache.
-                     None => on_change(CacheChange::Insertion { key, value}),
+                if inner.get(key).map_or_else(false, |v| v == value) {
+                    // The key is already mapped to the inserted value.
+                    // No change.
+                    continue;
+                } else {
+                    match inner.insert(key, value.clone()) {
+                        Some(_) => on_change(
+                            CacheChange::Modification { key, new_value: value }
+                        ),
+                        // If `insert` returns `Nonoh goe`, then there was no old value
+                        // previously present. Therefore, we inserted a new value
+                        // into the cache.
+                        None => on_change(CacheChange::Insertion { key, value }),
+                    }
                 }
+
             }
         }
 
