@@ -452,7 +452,7 @@ impl <T: HttpService<ResponseBody = RecvBody>> DestinationSet<T> {
         };
         trace!("{} {:?} for {:?}", update_str, addr, authority_for_logging);
         // retain is used to drop any senders that are dead
-        txs.retain(move |tx| {
+        txs.retain(|tx| {
             tx.unbounded_send(update).is_ok()
         });
     }
