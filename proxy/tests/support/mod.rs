@@ -26,7 +26,7 @@ use self::bytes::{BigEndian, BytesMut};
 pub use self::bytes::Bytes;
 pub use self::conduit_proxy::*;
 pub use self::futures::*;
-use self::futures::sync::oneshot;
+use self::futures::sync::{mpsc, oneshot};
 pub use self::http::{HeaderMap, Request, Response, StatusCode};
 use self::http::header::HeaderValue;
 use self::tokio_connect::Connect;
@@ -59,13 +59,15 @@ impl Shutdown {
 pub type ShutdownRx = Box<Future<Item=(), Error=()> + Send>;
 
 /// A channel used to signal when a Client's related connection is running or closed.
-pub fn running() -> (oneshot::Sender<()>, Running) {
-    let (tx, rx) = oneshot::channel();
-    let rx = rx.then((|_| Ok::<_, ()>(())) as fn(_) -> _).fuse();
+pub fn running() -> (mpsc::Sender<()>, Running) {
+    let (tx, rx) = mpsc::channel(0);
+    let rx = Box::new(rx.for_each(|()| -> Result<(), ()> {
+        panic!("running shouldn't ever receive")
+    }));
     (tx, rx)
 }
 
-pub type Running = future::Fuse<future::Then<oneshot::Receiver<()>, Result<(), ()>, fn(Result<(), oneshot::Canceled>) -> Result<(), ()>>>;
+pub type Running = Box<Future<Item=(), Error=()> + Send>;
 
 struct RecvBodyStream(tower_h2::RecvBody);
 

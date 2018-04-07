@@ -97,8 +97,10 @@ impl Client {
         b
     }
 
-    pub fn running(&mut self) -> &mut Running {
-        &mut self.running
+    pub fn wait_for_closed(self) {
+        self.running
+            .wait()
+            .expect("wait_for_closed");
     }
 }
 
@@ -120,7 +122,7 @@ fn run(addr: SocketAddr, version: Run) -> (Sender, Running) {
         let conn = Conn {
             addr,
             handle: reactor.clone(),
-            running: RefCell::new(Some(running_tx)),
+            running: running_tx,
         };
 
         let work: Box<Future<Item=(), Error=()>> = match version {
@@ -190,18 +192,18 @@ fn run(addr: SocketAddr, version: Run) -> (Sender, Running) {
     (tx, running_rx)
 }
 
-/// The "connector". It's only good for 1 connect.
+/// The "connector". Clones `running` into new connections, so we can signal
+/// when all connections are finally closed.
 struct Conn {
     addr: SocketAddr,
     handle: Handle,
     /// When this Sender drops, that should mean the connection is closed.
-    /// This is why this Conn is only usable once.
-    running: RefCell<Option<oneshot::Sender<()>>>,
+    running: mpsc::Sender<()>,
 }
 
 impl Conn {
     fn connect_(&self) -> Box<Future<Item = RunningIo, Error = ::std::io::Error>> {
-        let running = self.running.borrow_mut().take().expect("connected more than once");
+        let running = self.running.clone();
         let c = TcpStream::connect(&self.addr, &self.handle)
             .and_then(|tcp| tcp.set_nodelay(true).map(move |_| tcp))
             .map(move |tcp| RunningIo {
@@ -238,7 +240,7 @@ struct RunningIo {
     inner: TcpStream,
     /// When this drops, the related Receiver is notified that the connection
     /// is closed.
-    running: oneshot::Sender<()>,
+    running: mpsc::Sender<()>,
 }
 
 impl io::Read for RunningIo {

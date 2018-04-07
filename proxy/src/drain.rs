@@ -56,6 +56,7 @@ enum State<F> {
     Draining,
 }
 
+//TODO: in Rust 1.26, replace this with `!`.
 #[derive(Debug)]
 enum Never {}
 
@@ -67,6 +68,11 @@ pub struct Drained {
 // ===== impl Signal =====
 
 impl Signal {
+    /// Start the draining process.
+    ///
+    /// A signal is sent to all futures watching for the signal. A new future
+    /// is returned from this method that resolves when all watchers have
+    /// completed.
     pub fn drain(self) -> Drained {
         let _ = self.tx.send(());
         Drained {
@@ -78,6 +84,10 @@ impl Signal {
 // ===== impl Watch =====
 
 impl Watch {
+    /// Wrap a future and a callback that is triggered when drain is received.
+    ///
+    /// The callback receives a mutable reference to the original future, and
+    /// should be used to trigger any shutdown process for it.
     pub fn watch<A, F>(self, future: A, on_drain: F) -> Watching<A, F>
     where
         A: Future,
@@ -138,3 +148,20 @@ impl Future for Drained {
     }
 }
 
+/*
+#[cfg(test)]
+mod tests {
+    use futures::future;
+    use super::*;
+
+    #[test]
+    fn watch() {
+        future::lazy(|| {
+
+            let (tx, rx) = channel();
+
+        }).wait().unwrap();
+
+    }
+}
+*/
