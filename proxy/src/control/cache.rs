@@ -83,20 +83,25 @@ where
             I: Iterator<Item = (K, V)>,
             F: FnMut(CacheChange<K, V>),
         {
-            for (key, value) in iter {
-                if inner.get(key).map_or_else(false, |v| v == value) {
+            for (key, new_value) in iter {
+                if inner.get(&key)
+                    .map_or(false, |current| current == &new_value) {
                     // The key is already mapped to the inserted value.
                     // No change.
                     continue;
                 } else {
-                    match inner.insert(key, value.clone()) {
-                        Some(_) => on_change(
-                            CacheChange::Modification { key, new_value: value }
-                        ),
-                        // If `insert` returns `Nonoh goe`, then there was no old value
+                    match inner.insert(key, new_value.clone()) {
+                        Some(_) => on_change(CacheChange::Modification {
+                            key,
+                            new_value
+                        }),
+                        // If `insert` returns `None`, then there was no old value
                         // previously present. Therefore, we inserted a new value
                         // into the cache.
-                        None => on_change(CacheChange::Insertion { key, value }),
+                        None => on_change(CacheChange::Insertion {
+                            key,
+                            value: new_value
+                        }),
                     }
                 }
 
